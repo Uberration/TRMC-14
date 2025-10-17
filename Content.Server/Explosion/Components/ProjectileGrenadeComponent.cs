@@ -51,4 +51,23 @@ public sealed partial class ProjectileGrenadeComponent : Component
     /// </summary>
     [DataField]
     public int DirectHitProjectiles = 5;
+
+    /// <summary>
+    ///     The maximum number of projectiles to spawn per tick when fragmenting.
+    ///     Set to 0 or less to spawn all at once (legacy behavior).
+    /// </summary>
+    [DataField]
+    public int MaxProjectilesPerTick = 0;
+
+    /// <summary>
+    ///     The number of projectiles already spawned in the current fragmentation burst.
+    /// </summary>
+    [ViewVariables]
+    public int SpawnedCount = 0;
+
+    /// <summary>
+    ///     The total number of projectiles to spawn in the current fragmentation burst.
+    /// </summary>
+    [ViewVariables]
+    public int TotalToSpawn = 0;
 }
