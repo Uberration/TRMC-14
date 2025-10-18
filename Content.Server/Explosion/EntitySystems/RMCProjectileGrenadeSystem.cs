@@ -6,9 +6,11 @@ using Content.Shared.Damage;
 using Content.Shared.Explosion.Components;
 using Content.Shared.Mobs.Components;
 using Content.Shared.Mobs.Systems;
+using Content.Shared.Physics;
 using Content.Shared.Projectiles;
 using Robust.Server.GameObjects;
 using Robust.Shared.Physics.Components;
+using Robust.Shared.Physics.Systems;
 using Robust.Shared.Random;
 using Robust.Shared.Timing;
 
@@ -25,6 +27,7 @@ public sealed class RMCProjectileGrenadeSystem : EntitySystem
     [Dependency] private readonly MobStateSystem _mobState = default!;
     [Dependency] private readonly DamageableSystem _damage = default!;
     [Dependency] private readonly IGameTiming _timing = default!;
+    [Dependency] private readonly SharedPhysicsSystem _physics = default!;
 
     public override void Initialize()
     {
@@ -32,6 +35,9 @@ public sealed class RMCProjectileGrenadeSystem : EntitySystem
 
         SubscribeLocalEvent<ProjectileGrenadeComponent, ProjectileHitEvent>(OnStartCollide);
         SubscribeLocalEvent<ProjectileGrenadeComponent, FragmentIntoProjectilesEvent>(OnFragmentIntoProjectiles);
+
+        // Staggered spawning subscriptions
+        SubscribeLocalEvent<RMCStaggeredGrenadeComponent, TriggerEvent>(OnStaggeredGrenadeTriggered);
     }
 
     /// <summary>
@@ -128,12 +134,105 @@ public sealed class RMCProjectileGrenadeSystem : EntitySystem
         return projectileCount;
     }
 
-    public override void Update(float frametime)
+    /// <summary>
+    /// Handles staggered grenade triggering - prevents immediate spawning and starts staggered process
+    /// </summary>
+    private void OnStaggeredGrenadeTriggered(Entity<RMCStaggeredGrenadeComponent> ent, ref TriggerEvent args)
     {
+        if (!TryComp<ProjectileGrenadeComponent>(ent, out var grenade) ||
+            !TryComp<StaggeredSpawnDetailsComponent>(ent, out var staggerDetails))
+        {
+            return;
+        }
+
+        // Start staggered spawning instead of immediate spawning
+        StartStaggeredSpawning(ent, grenade, staggerDetails);
+
+        // Prevent the original grenade system from handling this
+        args.Handled = true;
+    }
+
+    /// <summary>
+    /// Starts the staggered spawning process for performance optimization
+    /// </summary>
+    private void StartStaggeredSpawning(EntityUid uid, ProjectileGrenadeComponent grenade, StaggeredSpawnDetailsComponent staggerDetails)
+    {
+        // Calculate how many ticks we need
+        var totalProjectiles = grenade.Capacity;
+        var spawnsPerTick = staggerDetails.SpawnsPerTick;
+        var totalTicks = (int)Math.Ceiling((double)totalProjectiles / spawnsPerTick);
+
+        // Start the staggered spawning process
+        var state = new StaggeredSpawnComponent
+        {
+            TotalProjectiles = totalProjectiles,
+            SpawnsPerTick = spawnsPerTick,
+            CurrentTick = 0,
+            TotalTicks = totalTicks,
+            Prototype = grenade.FillPrototype!
+        };
+
+        EnsureComp<ActiveStaggeredSpawnerComponent>(uid);
+        AddComp(uid, state);
+
+        // No Dirty() call needed - these are server-only components
+    }
+
+    /// <summary>
+    /// Processes staggered spawning for performance-optimized grenades
+    /// </summary>
+    private void ProcessStaggeredSpawn(Entity<StaggeredSpawnComponent> ent)
+    {
+        var remainingProjectiles = ent.Comp.TotalProjectiles - (ent.Comp.CurrentTick * ent.Comp.SpawnsPerTick);
+        var projectilesThisTick = Math.Min(ent.Comp.SpawnsPerTick, remainingProjectiles);
+
+        if (projectilesThisTick <= 0)
+        {
+            // Finished spawning
+            RemComp<ActiveStaggeredSpawnerComponent>(ent);
+            RemComp<StaggeredSpawnComponent>(ent);
+            return;
+        }
+
+        // Spawn projectiles for this tick
+        for (int i = 0; i < projectilesThisTick; i++)
+        {
+            var projectile = Spawn(ent.Comp.Prototype, Transform(ent).Coordinates);
+
+            // Apply random velocity
+            var direction = _random.NextAngle().ToVec();
+            if (TryComp<PhysicsComponent>(projectile, out var physics))
+            {
+                _physics.ApplyLinearImpulse(projectile, direction * _random.Next(5, 10), body: physics);
+            }
+
+            // Give the same IFF faction and enabled state
+            if (TryComp(ent.Owner, out ProjectileIFFComponent? grenadeIFFComponent))
+            {
+                _gunIFF.GiveAmmoIFF(projectile, grenadeIFFComponent.Faction, grenadeIFFComponent.Enabled);
+            }
+        }
+
+        ent.Comp.CurrentTick++;
+        // No Dirty() call needed - these are server-only components
+    }
+
+    public override void Update(float frameTime)
+    {
+        base.Update(frameTime);
+
+        // Your existing physics update
         var query = EntityQueryEnumerator<ProjectileGrenadeComponent, PhysicsComponent>();
         while (query.MoveNext(out var projectileUid, out _, out var physics))
         {
             _transform.SetWorldRotationNoLerp(projectileUid, physics.LinearVelocity.ToWorldAngle());
+        }
+
+        // Add staggered spawning processing
+        var staggerQuery = EntityQueryEnumerator<ActiveStaggeredSpawnerComponent, StaggeredSpawnComponent>();
+        while (staggerQuery.MoveNext(out var uid, out var _, out var state))
+        {
+            ProcessStaggeredSpawn((uid, state));
         }
     }
 }
@@ -143,3 +242,51 @@ public sealed class RMCProjectileGrenadeSystem : EntitySystem
 /// </summary>
 [ByRefEvent]
 public record struct FragmentIntoProjectilesEvent(EntityUid ContentUid, int TotalCount, Angle Angle, int ShootCount, List<EntityUid> HitEntities, bool Handled = false);
+
+/// <summary>
+/// Marker component for grenades that use the staggered spawning system
+/// </summary>
+[RegisterComponent]
+public sealed partial class RMCStaggeredGrenadeComponent : Component
+{
+}
+
+/// <summary>
+/// Configuration for staggered spawning behavior
+/// </summary>
+[RegisterComponent]
+public sealed partial class StaggeredSpawnDetailsComponent : Component
+{
+    [DataField("spawnsPerTick")]
+    public int SpawnsPerTick = 10;
+}
+
+/// <summary>
+/// Active component indicating a grenade is currently in the process of staggered spawning
+/// </summary>
+[RegisterComponent]
+public sealed partial class ActiveStaggeredSpawnerComponent : Component
+{
+}
+
+/// <summary>
+/// Tracks the current state of staggered spawning
+/// </summary>
+[RegisterComponent]
+public sealed partial class StaggeredSpawnComponent : Component
+{
+    [DataField("totalProjectiles")]
+    public int TotalProjectiles;
+
+    [DataField("spawnsPerTick")]
+    public int SpawnsPerTick;
+
+    [DataField("currentTick")]
+    public int CurrentTick;
+
+    [DataField("totalTicks")]
+    public int TotalTicks;
+
+    [DataField("prototype")]
+    public string Prototype = string.Empty;
+}

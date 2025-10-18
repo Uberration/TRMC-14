@@ -1,0 +1,314 @@
+# grenades_test.yml - ENHANCED PERFORMANCE TESTING PROTOTYPES
+
+# -------------------------------------------------------------------------------------
+# Enhanced Shrapnel Projectile Prototypes
+# -------------------------------------------------------------------------------------
+
+- type: entity
+  id: RMCTestProjectileBase
+  parent: BaseBullet
+  abstract: true
+  components:
+  - type: Projectile
+    damage:
+      types:
+        Piercing: 1
+  - type: TimedDespawn
+    lifetime: 2.0
+  - type: Sprite
+    sprite: Objects/Weapons/Guns/Projectiles/projectiles2.rsi
+    state: frag
+  - type: Tag
+    tags:
+      - RMCShrapnel
+
+# LAGGY: Uses expensive explosive system (for baseline comparison)
+- type: entity
+  id: RMCTestProjectileShrapnelLaggy
+  parent: RMCTestProjectileBase
+  name: laggy explosive shrapnel
+  components:
+  - type: ExplodeOnTrigger
+  - type: Explosive
+    explosionType: Default
+    maxIntensity: 2
+    intensitySlope: 1
+    totalIntensity: 4
+    deleteOnTrigger: true
+  - type: PointLight
+    radius: 1.5
+    color: orange
+    energy: 0.3
+
+# PERFORMANT: Area damage shrapnel (clears foliage/light objects)
+- type: entity
+  id: RMCTestProjectileShrapnelArea
+  parent: RMCTestProjectileBase
+  name: area damage shrapnel
+  components:
+  - type: RMCProjectileDamage
+    radius: 2.0
+    damage:
+      types:
+        Piercing: 8
+        Structural: 2
+  - type: PointLight
+    radius: 1.0
+    color: yellow
+    energy: 0.2
+
+# PERFORMANT: Heavy direct damage shrapnel (structural/armor penetration)
+- type: entity
+  id: RMCTestProjectileShrapnelHeavy
+  parent: RMCTestProjectileBase
+  name: heavy penetration shrapnel
+  components:
+  - type: RMCProjectileDamage
+    radius: 0  # Direct hit only
+    damage:
+      types:
+        Piercing: 25
+        Structural: 10
+  - type: PointLight
+    radius: 0.8
+    color: red
+    energy: 0.4
+
+# PERFORMANT: Specialized shrapnel types for different test scenarios
+- type: entity
+  id: RMCTestProjectileShrapnelIncendiary
+  parent: RMCTestProjectileBase
+  name: incendiary shrapnel
+  components:
+  - type: RMCProjectileDamage
+    radius: 1.5
+    damage:
+      types:
+        Heat: 12
+        Piercing: 3
+  - type: IgniteOnCollide
+    fireStacks: 2.0
+  - type: PointLight
+    radius: 1.2
+    color: "#ff4300"
+    energy: 0.5
+
+- type: entity
+  id: RMCTestProjectileShrapnelStun
+  parent: RMCTestProjectileBase
+  name: stun shrapnel
+  components:
+  - type: RMCProjectileDamage
+    radius: 1.0
+    damage:
+      types:
+        Blunt: 5
+  - type: StaminaDamageOnCollide
+    damage: 40
+  - type: PointLight
+    radius: 1.0
+    color: blue
+    energy: 0.3
+
+# -------------------------------------------------------------------------------------
+# Enhanced Grenade Test Prototypes
+# -------------------------------------------------------------------------------------
+
+- type: entity
+  id: RMCTestGrenadeBase
+  parent: CMGrenadeHighExplosive
+  abstract: true
+  components:
+  - type: Sprite
+    sprite: _RMC14/Objects/Weapons/Grenades/m40hedp.rsi
+    state: icon
+  - type: Item
+    size: Small
+  - type: Explosive
+    maxIntensity: 5  # Small base explosion
+    intensitySlope: 2
+    totalIntensity: 20
+    deleteAfterExplosion: false
+
+# ============================================================================
+# CONTROL GROUP - LAG SPIKE DEMONSTRATION
+# ============================================================================
+
+# ULTRA LAG: Maximum entity spam (worst case scenario)
+- type: entity
+  id: RMCTestGrenadeUltraLagSpike
+  parent: RMCTestGrenadeBase
+  name: ULTRA LAG Grenade (CONTROL)
+  description: WARNING! Spawns 200 explosive projectiles in ONE TICK. This WILL freeze the server temporarily. Use only for baseline performance measurement.
+  components:
+  - type: ProjectileGrenade
+    capacity: 200
+    fillPrototype: RMCTestProjectileShrapnelLaggy
+    spreadAngle: 360
+    directHit: false
+
+# HEAVY LAG: Realistic worst-case (similar to current frag grenades)
+- type: entity
+  id: RMCTestGrenadeHeavyLag
+  parent: RMCTestGrenadeBase
+  name: Heavy Lag Grenade (CONTROL)
+  description: Spawns 100 explosive projectiles in one tick. Represents current worst-case performance.
+  components:
+  - type: ProjectileGrenade
+    capacity: 100
+    fillPrototype: RMCTestProjectileShrapnelLaggy
+    spreadAngle: 360
+
+# ============================================================================
+# PERFORMANCE OPTIMIZED GRENADES
+# ============================================================================
+
+# PERFORMANT: Standard staggered grenade (primary test case)
+- type: entity
+  id: RMCTestGrenadeStaggeredStandard
+  parent: RMCTestGrenadeBase
+  name: Staggered Frag Grenade (Standard)
+  description: Standard performance test - spawns 100 area-damage projectiles over 4 ticks (25 per tick). Should be significantly smoother than control.
+  components:
+  - type: RMCStaggeredGrenade
+  - type: StaggeredSpawnDetails
+    spawnsPerTick: 25
+  - type: ProjectileGrenade
+    capacity: 100
+    fillPrototype: RMCTestProjectileShrapnelArea
+    spreadAngle: 360
+
+# PERFORMANT: Aggressive staggered grenade (high performance)
+- type: entity
+  id: RMCTestGrenadeStaggeredAggressive
+  parent: RMCTestGrenadeBase
+  name: Staggered Frag Grenade (Aggressive)
+  description: High-performance configuration - spawns 150 projectiles over 3 ticks (50 per tick). Balance between performance and visual impact.
+  components:
+  - type: RMCStaggeredGrenade
+  - type: StaggeredSpawnDetails
+    spawnsPerTick: 50
+  - type: ProjectileGrenade
+    capacity: 150
+    fillPrototype: RMCTestProjectileShrapnelArea
+    spreadAngle: 360
+
+# PERFORMANT: Conservative staggered grenade (maximum performance)
+- type: entity
+  id: RMCTestGrenadeStaggeredConservative
+  parent: RMCTestGrenadeBase
+  name: Staggered Frag Grenade (Conservative)
+  description: Maximum performance - spawns 120 projectiles over 6 ticks (20 per tick). Minimal performance impact.
+  components:
+  - type: RMCStaggeredGrenade
+  - type: StaggeredSpawnDetails
+    spawnsPerTick: 20
+  - type: ProjectileGrenade
+    capacity: 120
+    fillPrototype: RMCTestProjectileShrapnelArea
+    spreadAngle: 360
+
+# ============================================================================
+# VISUALIZATION & SPECIALIZED TEST GRENADES
+# ============================================================================
+
+# VISUALIZATION: Slow spawn for clear visual confirmation
+- type: entity
+  id: RMCTestGrenadeStaggeredVisual
+  parent: RMCTestGrenadeBase
+  name: Staggered Grenade (Visual Test)
+  description: Slow spawn for visual confirmation - spawns 60 heavy projectiles over 12 ticks (5 per tick). Watch the staggered effect!
+  components:
+  - type: RMCStaggeredGrenade
+  - type: StaggeredSpawnDetails
+    spawnsPerTick: 5
+  - type: ProjectileGrenade
+    capacity: 60
+    fillPrototype: RMCTestProjectileShrapnelHeavy
+    spreadAngle: 360
+
+# SPECIALIZED: Mixed damage types grenade (SIMPLIFIED - removed problematic container)
+- type: entity
+  id: RMCTestGrenadeMixedDamage
+  parent: RMCTestGrenadeBase
+  name: Mixed Damage Grenade
+  description: Tests mixed projectile types with staggered spawning - uses area damage shrapnel.
+  components:
+  - type: RMCStaggeredGrenade
+  - type: StaggeredSpawnDetails
+    spawnsPerTick: 15
+  - type: ProjectileGrenade
+    capacity: 75
+    fillPrototype: RMCTestProjectileShrapnelArea
+    spreadAngle: 360
+
+# ============================================================================
+# CLUSTER GRENADE TESTS (Future Work Demonstration)
+# ============================================================================
+
+# CLUSTER LAG: Demonstrates next optimization target
+- type: entity
+  id: RMCTestGrenadeClusterLag
+  parent: RMCTestGrenadeBase
+  name: Cluster Lag Grenade (Future Work)
+  description: This cluster grenade spawns multiple sub-grenades that each spawn their own shrapnel. Demonstrates cascading entity explosion problem.
+  components:
+  - type: OnUseTimerTrigger
+    delay: 3
+  - type: ScatteringGrenade
+    capacity: 8
+    fillPrototype: RMCTestGrenadeMiniCluster
+    spreadAngle: 180
+
+# Mini cluster grenade
+- type: entity
+  parent: CMGrenadeFrag
+  id: RMCTestGrenadeMiniCluster
+  name: mini cluster grenade
+  components:
+  - type: Sprite
+    layers:
+    - state: icon
+      scale: 0.4, 0.4
+  - type: Explosive
+    maxIntensity: 2
+    intensitySlope: 1
+    totalIntensity: 8
+  - type: ProjectileGrenade
+    capacity: 12
+    fillPrototype: RMCTestProjectileShrapnelLaggy
+    spreadAngle: 180
+  - type: OnUseTimerTrigger
+    delay: 0.5
+
+# ============================================================================
+# REAL-WORLD COMPARISON GRENADES
+# ============================================================================
+
+# REPLICA: Current M40 HEFA grenade behavior
+- type: entity
+  id: RMCTestGrenadeCurrentHEFA
+  parent: CMGrenadeFrag
+  name: Current HEFA Replica
+  description: Replicates current M40 HEFA grenade behavior for direct comparison.
+  components:
+  - type: ProjectileGrenade
+    capacity: 48
+    fillPrototype: CMProjectileShrapnel
+    maxProjectilesPerTick: 12
+    spreadAngle: 360
+
+# OPTIMIZED: Staggered version of current HEFA
+- type: entity
+  id: RMCTestGrenadeOptimizedHEFA
+  parent: CMGrenadeFrag
+  name: Optimized HEFA
+  description: Staggered version of M40 HEFA with same damage output but better performance.
+  components:
+  - type: RMCStaggeredGrenade
+  - type: StaggeredSpawnDetails
+    spawnsPerTick: 12
+  - type: ProjectileGrenade
+    capacity: 48
+    fillPrototype: CMProjectileShrapnel
+    spreadAngle: 360

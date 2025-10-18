@@ -127,6 +127,8 @@
 - type: Tag
   id: RMCSynthResetKey
 
-
 - type: Tag
   id: RMCXenoParasitePreparingLeap
+
+- type: Tag
+  id: RMCShrapnel

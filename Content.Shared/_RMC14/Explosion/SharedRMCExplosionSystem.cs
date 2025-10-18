@@ -230,8 +230,7 @@ public abstract class SharedRMCExplosionSystem : EntitySystem
                 {
                     var angle = _random.NextAngle();
                     var direction = angle.ToVec().Normalized() * 10;
-                    var shrapnel = SpawnNextToOrDrop(effect, ent);
-                    _throwing.TryThrow(shrapnel, direction, ent.Comp.ShrapnelSpeed / 10);
+                    SpawnNextToOrDrop(effect, ent);
                 }
             }
         }

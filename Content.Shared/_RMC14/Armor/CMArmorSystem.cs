@@ -325,76 +325,113 @@ public sealed class CMArmorSystem : EntitySystem
 
     private void ModifyDamage(EntityUid ent, ref DamageModifyEvent args)
     {
+        // Comprehensive entity validation - prevent processing deleted/terminating entities
+        if (Deleted(ent) || Terminating(ent) || !EntityManager.EntityExists(ent) || !HasComp<TransformComponent>(ent))
+        {
+            return;
+        }
+
+        // Validate tool entity if present
+        if (args.Tool.HasValue && (Deleted(args.Tool.Value) || Terminating(args.Tool.Value)))
+        {
+            args.Tool = null;
+        }
+
         // TODO RMC14 the slot should depend on the part that is receiving the damage once part damage is in
         var ev = new CMGetArmorEvent(SlotFlags.OUTERCLOTHING | SlotFlags.INNERCLOTHING);
         RaiseLocalEvent(ent, ref ev);
 
         var armorPiercing = args.ArmorPiercing;
-        if (args.Tool != null)
+        if (args.Tool != null && EntityManager.EntityExists(args.Tool.Value))
         {
             var piercingEv = new CMGetArmorPiercingEvent(ent);
             RaiseLocalEvent(args.Tool.Value, ref piercingEv);
             armorPiercing += piercingEv.Piercing;
         }
 
-var immuneToAP = TryComp<CMArmorComponent>(ent, out var armorComp) && armorComp.ImmuneToAP;
+        var immuneToAP = TryComp<CMArmorComponent>(ent, out var armorComp) && armorComp.ImmuneToAP;
+
         if (HasComp<XenoComponent>(ent))
         {
             ev.XenoArmor = (int)(ev.XenoArmor * ev.ArmorModifier);
             if (!immuneToAP)
-                ev.XenoArmor -= armorPiercing;
+                ev.XenoArmor = Math.Max(0, ev.XenoArmor - armorPiercing);
         }
         else
         {
             ev.Melee = (int)(ev.Melee * ev.ArmorModifier);
             ev.Bullet = (int)(ev.Bullet * ev.ArmorModifier);
+            ev.Bio = (int)(ev.Bio * ev.ArmorModifier);
 
             if (!immuneToAP)
-                ev.Melee -= armorPiercing;
-                ev.Bullet -= armorPiercing;
-                ev.Bio -= armorPiercing;
+            {
+                ev.Melee = Math.Max(0, ev.Melee - armorPiercing);
+                ev.Bullet = Math.Max(0, ev.Bullet - armorPiercing);
+                ev.Bio = Math.Max(0, ev.Bio - armorPiercing);
+            }
         }
 
-        if (args.Origin is { } origin)
+        // Calculate directional armor bonuses with safety checks
+        if (args.Origin is { } origin && EntityManager.EntityExists(origin) && HasComp<TransformComponent>(origin))
         {
             var originCoords = _transform.GetMapCoordinates(origin);
             var armorCoords = _transform.GetMapCoordinates(ent);
 
+            // Only process if both entities are on the same map
             if (originCoords.MapId == armorCoords.MapId)
             {
-                var diff = (originCoords.Position - armorCoords.Position).ToWorldAngle().GetCardinalDir();
-                var dir = _transform.GetWorldRotation(ent).GetCardinalDir();
-                if (dir == diff)
+                var attackVector = originCoords.Position - armorCoords.Position;
+
+                // Skip if attack vector is zero-length (shouldn't happen but safety check)
+                if (attackVector.LengthSquared() > 0.01f)
                 {
-                    ev.XenoArmor += ev.FrontalArmor;
-                }
-                else
-                {
-                    var perpendiculars = diff.GetPerpendiculars();
-                    if (dir == perpendiculars.First || dir == perpendiculars.Second)
-                        ev.XenoArmor += ev.SideArmor;
+                    var attackDir = attackVector.ToWorldAngle().GetCardinalDir();
+                    var facingDir = _transform.GetWorldRotation(ent).GetCardinalDir();
+
+                    if (facingDir == attackDir)
+                    {
+                        // Frontal attack - apply frontal armor bonus
+                        ev.XenoArmor += ev.FrontalArmor;
+                    }
+                    else
+                    {
+                        var perpendiculars = attackDir.GetPerpendiculars();
+                        if (facingDir == perpendiculars.First || facingDir == perpendiculars.Second)
+                        {
+                            // Side attack - apply side armor bonus
+                            ev.XenoArmor += ev.SideArmor;
+                        }
+                        // Rear attack gets no bonus armor
+                    }
                 }
             }
         }
 
-        //Default modifier
+        // Apply armor modifier component
         var mod = EnsureComp<RMCArmorModifierComponent>(ent);
 
+        // Create a copy to avoid modifying the original specifier
         args.Damage = new DamageSpecifier(args.Damage);
+
+        // Apply resistance based on entity type and damage source
         if (!HasComp<XenoComponent>(ent))
         {
-            if (HasComp<RMCBulletComponent>(args.Tool))
+            // Human armor calculations
+            if (args.Tool != null && HasComp<RMCBulletComponent>(args.Tool.Value))
             {
                 Resist(args.Damage, ev.Bullet, ArmorGroup, mod.RangedArmorModifier);
             }
-            else if (HasComp<MeleeWeaponComponent>(args.Tool))
+            else if (args.Tool != null && HasComp<MeleeWeaponComponent>(args.Tool.Value))
             {
                 Resist(args.Damage, ev.Melee, ArmorGroup, mod.MeleeArmorModifier);
             }
+
+            // Always apply bio resistance for humans
             Resist(args.Damage, ev.Bio, BioGroup, mod.RangedArmorModifier);
         }
         else
         {
+            // Xeno armor calculations
             Resist(args.Damage, ev.XenoArmor, ArmorGroup, mod.RangedArmorModifier);
         }
     }

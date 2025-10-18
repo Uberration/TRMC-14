@@ -49,37 +49,59 @@ public sealed class RMCProjectileSystem : EntitySystem
 
     private void OnDeleteOnCollideStartCollide(Entity<DeleteOnCollideComponent> ent, ref StartCollideEvent args)
     {
-        if (_net.IsServer)
+        // Validate both entities before processing
+        if (!IsValidAndAlive(ent) || !IsValidAndAlive(args.OtherEntity))
+            return;
+
+        if (_net.IsServer && IsValidAndAlive(ent))
             QueueDel(ent);
     }
 
     private void OnModifyTargetOnHit(Entity<ModifyTargetOnHitComponent> ent, ref ProjectileHitEvent args)
     {
+        // Validate entities before processing
+        if (!IsValidAndAlive(ent) || !IsValidAndAlive(args.Target))
+            return;
+
         if (!_whitelist.IsWhitelistPassOrNull(ent.Comp.Whitelist, args.Target))
             return;
-        if (ent.Comp.Add is { } add)
+
+        // Only add components if target is still valid
+        if (ent.Comp.Add is { } add && IsValidAndAlive(args.Target))
             EntityManager.AddComponents(args.Target, add);
     }
 
     private void OnProjectileMaxRangeMapInit(Entity<ProjectileMaxRangeComponent> ent, ref MapInitEvent args)
     {
+        if (!IsValidAndAlive(ent))
+            return;
+
         ent.Comp.Origin = _transform.GetMoverCoordinates(ent);
         Dirty(ent);
     }
 
     private void OnFalloffProjectileMapInit(Entity<RMCProjectileDamageFalloffComponent> projectile, ref MapInitEvent args)
     {
+        if (!IsValidAndAlive(projectile))
+            return;
+
         projectile.Comp.ShotFrom = _transform.GetMoverCoordinates(projectile.Owner);
         Dirty(projectile);
     }
 
     private void OnFalloffProjectileHit(Entity<RMCProjectileDamageFalloffComponent> projectile, ref ProjectileHitEvent args)
     {
+        // Validate all entities before processing
+        if (!IsValidAndAlive(projectile) || !IsValidAndAlive(args.Target))
+            return;
+
         if (projectile.Comp.ShotFrom == null || projectile.Comp.MinRemainingDamageMult < 0)
             return;
 
-        var distance = (_transform.GetMoverCoordinates(args.Target).Position - projectile.Comp.ShotFrom.Value.Position).Length();
+        var targetCoords = _transform.GetMoverCoordinates(args.Target);
+        var distance = (targetCoords.Position - projectile.Comp.ShotFrom.Value.Position).Length();
         var minDamage = args.Damage.GetTotal() * projectile.Comp.MinRemainingDamageMult;
+
         foreach (var threshold in projectile.Comp.Thresholds)
         {
             var pastEffectiveRange = distance - threshold.Range;
@@ -100,6 +122,9 @@ public sealed class RMCProjectileSystem : EntitySystem
 
     public void SetProjectileFalloffWeaponMult(Entity<RMCProjectileDamageFalloffComponent> projectile, FixedPoint2 mult, float range)
     {
+        if (!IsValidAndAlive(projectile))
+            return;
+
         var count = 0;
         while (projectile.Comp.Thresholds.Count > count)
         {
@@ -114,6 +139,9 @@ public sealed class RMCProjectileSystem : EntitySystem
 
     private void OnProjectileAccuracyMapInit(Entity<RMCProjectileAccuracyComponent> projectile, ref MapInitEvent args)
     {
+        if (!IsValidAndAlive(projectile))
+            return;
+
         projectile.Comp.ShotFrom = _transform.GetMoverCoordinates(projectile.Owner);
         projectile.Comp.Tick = _timing.CurTick.Value;
 
@@ -125,10 +153,14 @@ public sealed class RMCProjectileSystem : EntitySystem
         if (args.Cancelled)
             return;
 
+        // Validate entities before processing
+        if (!IsValidAndAlive(projectile) || !IsValidAndAlive(args.OtherEntity))
+            return;
+
         if (projectile.Comp.ForceHit || projectile.Comp.ShotFrom == null)
             return;
 
-        if (!TryComp(projectile.Owner, out ProjectileComponent? projectileComponent))
+        if (!TryComp(projectile.Owner, out ProjectileComponent? projectileComponent) || projectileComponent.Shooter == null)
             return;
 
         if (!TryComp(args.OtherEntity, out EvasionComponent? evasionComponent))
@@ -167,7 +199,14 @@ public sealed class RMCProjectileSystem : EntitySystem
 
         accuracy = accuracy > projectile.Comp.MinAccuracy ? accuracy : projectile.Comp.MinAccuracy;
 
-        var random = new Xoshiro128P(projectile.Comp.GunSeed, (long) projectile.Comp.Tick << 32 | GetNetEntity(args.OtherEntity).Id).NextFloat(0f, 100f);
+        // Fix: Ensure GunSeed and Tick are properly initialized
+        var gunSeed = projectile.Comp.GunSeed;
+        var tick = projectile.Comp.Tick;
+
+        // Use the entity's hash code for the random seed
+        var entityHash = args.OtherEntity.GetHashCode();
+        var randomSeed = (long) tick << 32 | (uint)entityHash;
+        var random = new Xoshiro128P(gunSeed, randomSeed).NextFloat(0f, 100f);
 
         if (accuracy >= random)
             return;
@@ -177,7 +216,14 @@ public sealed class RMCProjectileSystem : EntitySystem
 
     private bool IsProjectileTargetFriendly(EntityUid projectile, EntityUid target)
     {
+        if (!IsValidAndAlive(projectile) || !IsValidAndAlive(target))
+            return false;
+
         if (!TryComp(projectile, out ProjectileComponent? projectileComp) || projectileComp.Shooter == null)
+            return false;
+
+        // Check if shooter is still valid
+        if (!IsValidAndAlive(projectileComp.Shooter.Value))
             return false;
 
         return _npcFaction.IsEntityFriendly(projectileComp.Shooter.Value, target);
@@ -185,6 +231,9 @@ public sealed class RMCProjectileSystem : EntitySystem
 
     private void OnSpawnOnTerminatingMapInit(Entity<SpawnOnTerminateComponent> ent, ref MapInitEvent args)
     {
+        if (!IsValidAndAlive(ent))
+            return;
+
         ent.Comp.Origin = _transform.GetMoverCoordinates(ent);
         Dirty(ent);
     }
@@ -192,6 +241,10 @@ public sealed class RMCProjectileSystem : EntitySystem
     private void OnSpawnOnTerminatingTerminate(Entity<SpawnOnTerminateComponent> ent, ref EntityTerminatingEvent args)
     {
         if (_net.IsClient)
+            return;
+
+        // Don't process if entity is already being terminated
+        if (TerminatingOrDeleted(ent))
             return;
 
         if (!TryComp(ent, out TransformComponent? transform))
@@ -210,7 +263,7 @@ public sealed class RMCProjectileSystem : EntitySystem
 
             if (HasComp<RMCFireProjectileComponent>(ent))
             {
-                coordinates = coordinates.Offset(delta.Normalized()); // Apparently that works...
+                coordinates = coordinates.Offset(delta.Normalized());
             }
         }
 
@@ -226,18 +279,28 @@ public sealed class RMCProjectileSystem : EntitySystem
         if (args.Cancelled)
             return;
 
+        // Validate entities before processing
+        if (!IsValidAndAlive(ent) || !IsValidAndAlive(args.OtherEntity))
+            return;
+
         if (_mobState.IsDead(args.OtherEntity))
             args.Cancelled = true;
     }
 
     public void SetMaxRange(Entity<ProjectileMaxRangeComponent> ent, float max)
     {
+        if (!IsValidAndAlive(ent))
+            return;
+
         ent.Comp.Max = max;
         Dirty(ent);
     }
 
     private void StopProjectile(Entity<ProjectileMaxRangeComponent> ent)
     {
+        if (!IsValidAndAlive(ent))
+            return;
+
         if (ent.Comp.Delete)
         {
             if (_net.IsServer || IsClientSide(ent))
@@ -255,6 +318,10 @@ public sealed class RMCProjectileSystem : EntitySystem
         var maxQuery = EntityQueryEnumerator<ProjectileMaxRangeComponent>();
         while (maxQuery.MoveNext(out var uid, out var comp))
         {
+            // Check if entity is still valid before processing
+            if (!IsValidAndAlive(uid))
+                continue;
+
             var coordinates = _transform.GetMoverCoordinates(uid);
             if (comp.Origin is not { } origin ||
                 !coordinates.TryDistance(EntityManager, _transform, origin, out var distance))
@@ -268,5 +335,33 @@ public sealed class RMCProjectileSystem : EntitySystem
 
             StopProjectile((uid, comp));
         }
+    }
+
+    /// <summary>
+    /// Comprehensive check to ensure an entity is valid, not deleted, and has required components
+    /// </summary>
+    private bool IsValidAndAlive(EntityUid entity)
+    {
+        // Check if entity is valid and not deleted
+        if (!Exists(entity) || Deleted(entity) || Terminating(entity))
+            return false;
+
+        // Ensure entity still has its metadata component and transform component
+        // TransformComponent is essential for most entity operations
+        return TryComp<MetaDataComponent>(entity, out var meta) &&
+               !meta.EntityDeleted &&
+               HasComp<TransformComponent>(entity);
+    }
+
+    /// <summary>
+    /// Overload for Entity<T> that includes component validation
+    /// </summary>
+    private bool IsValidAndAlive<T>(Entity<T> entity) where T : IComponent
+    {
+        if (!IsValidAndAlive(entity.Owner))
+            return false;
+
+        // Use HasComp instead of TryComp to avoid null reference issues
+        return HasComp<T>(entity.Owner);
     }
 }
